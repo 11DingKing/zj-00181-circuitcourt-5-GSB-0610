@@ -595,10 +595,13 @@ export class CaseFlowService {
     judgeReassignmentHistory: any;
     durationInfo: ReturnType<typeof CaseFlowService.calculateTrialDuration>;
   } | null> {
-    const objectId = toObjectId(id);
-    const caseDoc = await this.findPopulatedCaseById(objectId);
+    // 注意：直接把字符串交给 findById，由 Mongoose 进行 ObjectId 强转，
+    // 以便在 id 非法时抛出与重构前一致的 CastError
+    // ("Cast to ObjectId failed for value ...")。
+    const caseDoc = await this.findPopulatedCaseById(id);
     if (!caseDoc) return null;
 
+    const objectId = caseDoc._id as mongoose.Types.ObjectId;
     const flowHistory = await this.getCaseFlowHistory(objectId);
     const transferTrails = await this.getTransferTrails(objectId);
     const judgeReassignmentHistory =
