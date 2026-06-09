@@ -10,6 +10,13 @@ import {
   TransferSource,
 } from "../types/enums";
 import { CaseAssignmentService } from "./caseAssignmentService";
+import { JurisdictionService } from "./jurisdictionService";
+import {
+  ServiceValidationError,
+  toObjectId,
+  toOptionalBoolean,
+  toOptionalNumber,
+} from "./serviceHelpers";
 
 export interface CaseFlowRecordInput {
   caseId: mongoose.Types.ObjectId;
@@ -429,5 +436,217 @@ export class CaseFlowService {
       .populate("fromJudgeId")
       .populate("toJudgeId")
       .sort({ reassignedAt: -1 });
+  }
+
+  static async findPopulatedCaseById(
+    caseId: mongoose.Types.ObjectId | string,
+  ): Promise<ICase | null> {
+    return CaseModel.findById(caseId)
+      .populate("circuitCourtId")
+      .populate("judgeId")
+      .populate("panelJudges");
+  }
+
+  static async handleRegisterCase(body: any): Promise<{
+    case: ICase | null;
+    jurisdictionMatch: any;
+  }> {
+    const {
+      caseNumber,
+      caseType,
+      title,
+      description,
+      occurrenceLocation,
+      occurrenceDate,
+      transferSource,
+      sourceCourt,
+      involvesMultipleParties,
+      involvesLargeAmount,
+      hasTechnicalDifficulty,
+      hasSocialImpact,
+    } = body || {};
+
+    if (
+      !caseNumber ||
+      !caseType ||
+      !title ||
+      !occurrenceLocation ||
+      !occurrenceDate ||
+      !transferSource
+    ) {
+      throw new ServiceValidationError("请填写完整的案件信息");
+    }
+
+    const jurisdictionResult = await JurisdictionService.matchCircuitCourt({
+      province: occurrenceLocation.province,
+      city: occurrenceLocation.city,
+      county: occurrenceLocation.county,
+    });
+
+    if (!jurisdictionResult) {
+      throw new ServiceValidationError("无法确定案件管辖法庭");
+    }
+
+    const caseDoc = await this.registerCase(
+      {
+        caseNumber,
+        caseType,
+        title,
+        description,
+        occurrenceLocation,
+        occurrenceDate: new Date(occurrenceDate),
+        transferSource: transferSource as TransferSource,
+        sourceCourt,
+        involvesMultipleParties,
+        involvesLargeAmount,
+        hasTechnicalDifficulty,
+        hasSocialImpact,
+      },
+      jurisdictionResult.circuitCourt._id,
+      jurisdictionResult.isCrossRegional,
+      jurisdictionResult.originalJurisdiction,
+    );
+
+    if (jurisdictionResult.isCrossRegional) {
+      const fromCourtName =
+        sourceCourt || `${jurisdictionResult.originalJurisdiction}人民法院`;
+      const now = new Date();
+      await this.createTransferTrail({
+        caseId: caseDoc._id,
+        fromCourt: fromCourtName,
+        toCourt: jurisdictionResult.circuitCourt.name,
+        toCourtId: jurisdictionResult.circuitCourt._id,
+        transferSource: transferSource as TransferSource,
+        transferReason: "跨行政区划环境资源案件集中管辖移送",
+        transferDate: now,
+        receivedDate: caseDoc.acceptedDate,
+        transferDocuments: [
+          "案件移送函",
+          "立案审批表",
+          "证据材料清单",
+          "当事人身份证明",
+        ],
+        operatorName: "系统自动",
+        remark: `根据集中管辖规定，由${fromCourtName}移送至${jurisdictionResult.circuitCourt.name}审理`,
+      });
+    }
+
+    const populatedCase = await this.findPopulatedCaseById(caseDoc._id);
+
+    return {
+      case: populatedCase,
+      jurisdictionMatch: jurisdictionResult,
+    };
+  }
+
+  static async listCases(query: any): Promise<{
+    cases: ICase[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }> {
+    const {
+      courtId,
+      stage,
+      status,
+      caseType,
+      complexity,
+      isCrossRegional,
+      page = 1,
+      pageSize = 20,
+    } = query || {};
+
+    const filter: any = {};
+    if (courtId) filter.circuitCourtId = courtId;
+    if (stage) filter.stage = stage;
+    if (status) filter.status = status;
+    if (caseType) filter.caseType = caseType;
+    if (complexity) filter.complexity = complexity;
+    const crossRegional = toOptionalBoolean(isCrossRegional);
+    if (crossRegional !== undefined) filter.isCrossRegional = crossRegional;
+
+    const pageNum = toOptionalNumber(page) ?? 1;
+    const sizeNum = toOptionalNumber(pageSize) ?? 20;
+    const skip = (pageNum - 1) * sizeNum;
+
+    const cases = await CaseModel.find(filter)
+      .populate("circuitCourtId")
+      .populate("judgeId")
+      .sort({ acceptedDate: -1 })
+      .skip(skip)
+      .limit(sizeNum);
+
+    const total = await CaseModel.countDocuments(filter);
+
+    return {
+      cases,
+      total,
+      page: pageNum,
+      pageSize: sizeNum,
+      totalPages: Math.ceil(total / sizeNum),
+    };
+  }
+
+  static async getCaseDetail(id: string): Promise<{
+    case: ICase;
+    flowHistory: any;
+    transferTrails: any;
+    judgeReassignmentHistory: any;
+    durationInfo: ReturnType<typeof CaseFlowService.calculateTrialDuration>;
+  } | null> {
+    const objectId = toObjectId(id);
+    const caseDoc = await this.findPopulatedCaseById(objectId);
+    if (!caseDoc) return null;
+
+    const flowHistory = await this.getCaseFlowHistory(objectId);
+    const transferTrails = await this.getTransferTrails(objectId);
+    const judgeReassignmentHistory =
+      await this.getJudgeReassignmentHistory(objectId);
+    const durationInfo = this.calculateTrialDuration(caseDoc);
+
+    return {
+      case: caseDoc,
+      flowHistory,
+      transferTrails,
+      judgeReassignmentHistory,
+      durationInfo,
+    };
+  }
+
+  static async handleStageTransition(
+    id: string,
+    body: any,
+  ): Promise<ICase | null> {
+    const { toStage, operatorId, operatorName, remark } = body || {};
+
+    if (!toStage || !Object.values(CaseStage).includes(toStage)) {
+      throw new ServiceValidationError("请提供有效的案件阶段");
+    }
+
+    const caseId = toObjectId(id);
+    const caseDoc = await this.transitionStage({
+      caseId,
+      toStage: toStage as CaseStage,
+      operatorId,
+      operatorName,
+      remark,
+    });
+
+    if (!caseDoc) return null;
+
+    return this.findPopulatedCaseById(caseId);
+  }
+
+  static async handleCreateTransferRecord(body: any) {
+    if (!body || !body.caseId || !body.toCourtId || !body.transferDate) {
+      throw new ServiceValidationError("请填写完整的移送信息");
+    }
+    return this.createTransferTrail({
+      ...body,
+      caseId: toObjectId(body.caseId),
+      toCourtId: toObjectId(body.toCourtId),
+      transferDate: new Date(body.transferDate),
+    });
   }
 }
