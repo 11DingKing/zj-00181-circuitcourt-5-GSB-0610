@@ -16,10 +16,19 @@ export const registerCase = async (req: Request, res: Response) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
-    const statusCode = message.includes("请填写") || message.includes("无法确定") ? 400 : 500;
+    const isValidationError = message.includes("请填写") || message.includes("无法确定");
+    const statusCode = isValidationError ? 400 : 500;
+
+    if (isValidationError) {
+      return res.status(statusCode).json({
+        success: false,
+        message: message,
+      });
+    }
+
     res.status(statusCode).json({
       success: false,
-      message: message.includes("请填写") || message.includes("无法确定") ? message : "案件登记失败",
+      message: "案件登记失败",
       error: message,
     });
   }
@@ -99,10 +108,19 @@ export const transitionCaseStage = async (req: Request, res: Response) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
-    const statusCode = message.includes("有效的案件阶段") ? 400 : 500;
+    const isValidationError = message.includes("有效的案件阶段");
+    const statusCode = isValidationError ? 400 : 500;
+
+    if (isValidationError) {
+      return res.status(statusCode).json({
+        success: false,
+        message: message,
+      });
+    }
+
     res.status(statusCode).json({
       success: false,
-      message: message.includes("有效的案件阶段") ? message : "案件流转失败",
+      message: "案件流转失败",
       error: message,
     });
   }
