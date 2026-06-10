@@ -1,7 +1,8 @@
-import mongoose from 'mongoose';
-import Judge, { IJudge } from '../models/Judge';
-import CaseModel, { ICase } from '../models/Case';
-import { CaseComplexity, CaseType, JudgeSpecialty } from '../types/enums';
+import mongoose from "mongoose";
+import Judge, { IJudge } from "../models/Judge";
+import CaseModel, { ICase } from "../models/Case";
+import { CaseComplexity, CaseType, JudgeSpecialty } from "../types/enums";
+import { toOptionalObjectId } from "./serviceHelpers";
 
 export interface CaseAssignmentResult {
   judge: IJudge;
@@ -22,14 +23,32 @@ export interface ComplexityAssessmentInput {
 }
 
 const CaseTypeToSpecialtyMap: Partial<Record<CaseType, JudgeSpecialty[]>> = {
-  [CaseType.POLLUTION_ENVIRONMENT]: [JudgeSpecialty.POLLUTION_CONTROL, JudgeSpecialty.ECOLOGICAL_RESTORATION],
-  [CaseType.ILLEGAL_MINING]: [JudgeSpecialty.MINERAL_RESOURCES, JudgeSpecialty.ECOLOGICAL_RESTORATION],
+  [CaseType.POLLUTION_ENVIRONMENT]: [
+    JudgeSpecialty.POLLUTION_CONTROL,
+    JudgeSpecialty.ECOLOGICAL_RESTORATION,
+  ],
+  [CaseType.ILLEGAL_MINING]: [
+    JudgeSpecialty.MINERAL_RESOURCES,
+    JudgeSpecialty.ECOLOGICAL_RESTORATION,
+  ],
   [CaseType.ILLEGAL_HUNTING]: [JudgeSpecialty.WILDLIFE],
-  [CaseType.ECOLOGICAL_DAMAGE_COMPENSATION]: [JudgeSpecialty.ECOLOGICAL_RESTORATION, JudgeSpecialty.POLLUTION_CONTROL],
-  [CaseType.ILLEGAL_LOGGING]: [JudgeSpecialty.WILDLIFE, JudgeSpecialty.ECOLOGICAL_RESTORATION],
-  [CaseType.ILLEGAL_FISHING]: [JudgeSpecialty.WATER_RESOURCES, JudgeSpecialty.WILDLIFE],
+  [CaseType.ECOLOGICAL_DAMAGE_COMPENSATION]: [
+    JudgeSpecialty.ECOLOGICAL_RESTORATION,
+    JudgeSpecialty.POLLUTION_CONTROL,
+  ],
+  [CaseType.ILLEGAL_LOGGING]: [
+    JudgeSpecialty.WILDLIFE,
+    JudgeSpecialty.ECOLOGICAL_RESTORATION,
+  ],
+  [CaseType.ILLEGAL_FISHING]: [
+    JudgeSpecialty.WATER_RESOURCES,
+    JudgeSpecialty.WILDLIFE,
+  ],
   [CaseType.WILDLIFE_PROTECTION]: [JudgeSpecialty.WILDLIFE],
-  [CaseType.WATER_RESOURCE_PROTECTION]: [JudgeSpecialty.WATER_RESOURCES, JudgeSpecialty.POLLUTION_CONTROL]
+  [CaseType.WATER_RESOURCE_PROTECTION]: [
+    JudgeSpecialty.WATER_RESOURCES,
+    JudgeSpecialty.POLLUTION_CONTROL,
+  ],
 };
 
 export class CaseAssignmentService {
@@ -42,23 +61,35 @@ export class CaseAssignmentService {
     if (input.isCrossRegional) complexityScore += 15;
     if (input.hasSocialImpact) complexityScore += 25;
 
-    const keywords = ['重大', '恶劣', '严重', '跨省', '跨市', '集团', '系列', '疑难', '复杂'];
-    const desc = input.description || '';
+    const keywords = [
+      "重大",
+      "恶劣",
+      "严重",
+      "跨省",
+      "跨市",
+      "集团",
+      "系列",
+      "疑难",
+      "复杂",
+    ];
+    const desc = input.description || "";
     keywords.forEach((kw) => {
       if (desc.includes(kw)) complexityScore += 10;
     });
 
-    return complexityScore >= 50 ? CaseComplexity.COMPLEX : CaseComplexity.SIMPLE;
+    return complexityScore >= 50
+      ? CaseComplexity.COMPLEX
+      : CaseComplexity.SIMPLE;
   }
 
   static async assignCase(
     caseData: ICase,
-    circuitCourtId: mongoose.Types.ObjectId
+    circuitCourtId: mongoose.Types.ObjectId,
   ): Promise<CaseAssignmentResult | null> {
     const availableJudges = await Judge.find({
       circuitCourtId,
-      isActive: true
-    }).populate('circuitCourtId');
+      isActive: true,
+    }).populate("circuitCourtId");
 
     if (availableJudges.length === 0) {
       return null;
@@ -73,10 +104,10 @@ export class CaseAssignmentService {
 
   private static async assignSimpleCase(
     caseData: ICase,
-    judges: IJudge[]
+    judges: IJudge[],
   ): Promise<CaseAssignmentResult> {
     const preferredSpecialties = CaseTypeToSpecialtyMap[caseData.caseType] || [
-      JudgeSpecialty.GENERAL
+      JudgeSpecialty.GENERAL,
     ];
 
     const scoredJudges = judges.map((judge) => {
@@ -85,7 +116,9 @@ export class CaseAssignmentService {
       const workloadRatio = judge.currentCaseCount / judge.maxCaseLoad;
       score -= workloadRatio * 50;
 
-      const hasSpecialty = judge.specialties.some((s) => preferredSpecialties.includes(s));
+      const hasSpecialty = judge.specialties.some((s) =>
+        preferredSpecialties.includes(s),
+      );
       if (hasSpecialty) score += 30;
 
       if (judge.specialties.includes(JudgeSpecialty.GENERAL)) score += 10;
@@ -102,16 +135,16 @@ export class CaseAssignmentService {
       judge: selectedJudge,
       isPanel: false,
       assignmentReason: `简案快办通道，按专业匹配度和工作量均衡指派，得分: ${scoredJudges[0].score.toFixed(1)}`,
-      workloadScore: scoredJudges[0].score
+      workloadScore: scoredJudges[0].score,
     };
   }
 
   private static async assignComplexCase(
     caseData: ICase,
-    judges: IJudge[]
+    judges: IJudge[],
   ): Promise<CaseAssignmentResult> {
     const preferredSpecialties = CaseTypeToSpecialtyMap[caseData.caseType] || [
-      JudgeSpecialty.GENERAL
+      JudgeSpecialty.GENERAL,
     ];
 
     const scoredJudges = judges.map((judge) => {
@@ -121,7 +154,7 @@ export class CaseAssignmentService {
       score -= workloadRatio * 40;
 
       const specialtyMatchCount = judge.specialties.filter((s) =>
-        preferredSpecialties.includes(s)
+        preferredSpecialties.includes(s),
       ).length;
       score += specialtyMatchCount * 25;
 
@@ -145,31 +178,33 @@ export class CaseAssignmentService {
       isPanel: true,
       panelJudges,
       assignmentReason: `繁案合议庭审理，${panelSize}名法官组成合议庭，按专业匹配度和工作量均衡指派`,
-      workloadScore: scoredJudges[0].score
+      workloadScore: scoredJudges[0].score,
     };
   }
 
   private static async incrementJudgeCaseCount(
-    judgeId: mongoose.Types.ObjectId
+    judgeId: mongoose.Types.ObjectId,
   ): Promise<void> {
     await Judge.findByIdAndUpdate(
       judgeId,
       { $inc: { currentCaseCount: 1 } },
-      { new: true }
+      { new: true },
     );
   }
 
   static async decrementJudgeCaseCount(
-    judgeId: mongoose.Types.ObjectId
+    judgeId: mongoose.Types.ObjectId,
   ): Promise<void> {
     await Judge.findByIdAndUpdate(
       judgeId,
       { $inc: { currentCaseCount: -1 } },
-      { new: true }
+      { new: true },
     );
   }
 
-  static async getJudgeWorkload(circuitCourtId?: mongoose.Types.ObjectId): Promise<
+  static async getJudgeWorkload(
+    circuitCourtId?: mongoose.Types.ObjectId,
+  ): Promise<
     Array<{
       judge: IJudge;
       activeCases: number;
@@ -177,14 +212,16 @@ export class CaseAssignmentService {
       isOverloaded: boolean;
     }>
   > {
-    const query = circuitCourtId ? { circuitCourtId, isActive: true } : { isActive: true };
-    const judges = await Judge.find(query).populate('circuitCourtId');
+    const query = circuitCourtId
+      ? { circuitCourtId, isActive: true }
+      : { isActive: true };
+    const judges = await Judge.find(query).populate("circuitCourtId");
 
     const result = await Promise.all(
       judges.map(async (judge) => {
         const activeCases = await CaseModel.countDocuments({
           judgeId: judge._id,
-          status: { $in: ['pending', 'processing', 'urgent'] }
+          status: { $in: ["pending", "processing", "urgent"] },
         });
 
         const workloadPercentage = (activeCases / judge.maxCaseLoad) * 100;
@@ -193,9 +230,9 @@ export class CaseAssignmentService {
           judge,
           activeCases,
           workloadPercentage: Math.round(workloadPercentage * 10) / 10,
-          isOverloaded: activeCases > judge.maxCaseLoad
+          isOverloaded: activeCases > judge.maxCaseLoad,
         };
-      })
+      }),
     );
 
     return result.sort((a, b) => b.workloadPercentage - a.workloadPercentage);
@@ -210,8 +247,8 @@ export class CaseAssignmentService {
       const excess = over.activeCases - over.judge.maxCaseLoad;
       const cases = await CaseModel.find({
         judgeId: over.judge._id,
-        status: 'pending',
-        complexity: CaseComplexity.SIMPLE
+        status: "pending",
+        complexity: CaseComplexity.SIMPLE,
       }).limit(excess);
 
       for (const caseItem of cases) {
@@ -219,14 +256,15 @@ export class CaseAssignmentService {
           .filter(
             (w) =>
               !w.isOverloaded &&
-              w.judge.circuitCourtId.toString() === over.judge.circuitCourtId.toString()
+              w.judge.circuitCourtId.toString() ===
+                over.judge.circuitCourtId.toString(),
           )
           .sort((a, b) => a.workloadPercentage - b.workloadPercentage);
 
         if (otherJudges.length > 0) {
           const newJudge = otherJudges[0].judge;
           await CaseModel.findByIdAndUpdate(caseItem._id, {
-            judgeId: newJudge._id
+            judgeId: newJudge._id,
           });
           await this.decrementJudgeCaseCount(over.judge._id);
           await this.incrementJudgeCaseCount(newJudge._id);
@@ -236,5 +274,10 @@ export class CaseAssignmentService {
     }
 
     return reassignedCount;
+  }
+
+  static async handleGetJudgeWorkload(query: any) {
+    const courtId = toOptionalObjectId(query?.courtId);
+    return this.getJudgeWorkload(courtId);
   }
 }
